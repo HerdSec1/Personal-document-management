@@ -1,0 +1,17 @@
+# Virtual environments
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local runtime data (keep folder structure only)
+data/*
+!data/.gitkeep
+!data/README.md
+
+# VS Code settings (optional; remove if you want to share workspace settings)
+.vscode/
+
+# Windows noise
+Thumbs.db
