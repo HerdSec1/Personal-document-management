@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 
 from src.db import init_db, utc_now_iso
+from src.config import build_paths
 
 
 def sha256_file(path: Path) -> str:

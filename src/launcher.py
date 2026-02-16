@@ -10,8 +10,10 @@ from src.perdocman_server import make_server
 
 
 def run(vault_root: Path | None = None) -> int:
-    # For now, keep using your existing default unless you wire config.py
-    db_path = init_db()  # later: init_db(vault_root/db file)
+    if vault_root:
+        db_path = init_db(vault_root / "perdocman_documents.db")
+    else:
+        db_path = init_db()  # later: init_db(vault_root/db file)
     session_id = start_session(db_path=db_path, vault_root=vault_root, notes="PerDocMan launcher session")
 
     server = make_server("127.0.0.1", 0, db_path=db_path, vault_root=vault_root)  # port=0 picks an open port
