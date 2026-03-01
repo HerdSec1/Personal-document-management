@@ -1,69 +1,111 @@
-# System Architecture
+# Architecture Overview
 
-## Overview
+## Design Philosophy
 
-PerDocMan.exe is a local-first personal document management prototype designed to run entirely on a single user’s Windows machine. The system provides a local web-based interface for ingesting, indexing, and retrieving personal PDF documents while minimizing external exposure and maintaining transparency in data handling.
+PerDocMan is intentionally local-first. All ingestion, indexing, and
+retrieval occur on the user's machine. The system prioritizes privacy,
+data sovereignty, and extensibility over feature complexity.
 
-The application operates only while the executable is running. No background services, cloud dependencies, or persistent network listeners are used.
+Core architectural principles:
 
----
+-   Local data control
+-   Minimal external dependencies
+-   Defensive programming
+-   Extensible schema design
+-   Graceful failure handling
 
-## High-Level Components
+------------------------------------------------------------------------
 
-The system is composed of the following logical components:
+## System Components
 
-### 1. Executable Launcher (PerDocMan.exe)
-- Entry point for the user
-- Starts the local HTTP server
-- Opens the default web browser to the local interface
-- Terminates the server and records a session audit entry on exit
+### 1. Web Server Layer
 
-### 2. Local HTTP Server
-- Implemented using Python’s standard library
-- Bound explicitly to `127.0.0.1`
-- Serves HTML pages for interaction with the system
-- Handles document ingestion, listing, and search requests
+-   Implemented using `BaseHTTPRequestHandler`
+-   Handles routing for:
+    -   Dashboard (`/`)
+    -   Document list (`/documents`)
+    -   Document preview (`/doc?id=...`)
+    -   Ingestion (`/ingest`)
+    -   Reset (`/reset`)
 
-### 3. Metadata Store (SQLite)
-- Stores structured metadata about ingested documents
-- Maintains indexes to support efficient retrieval
-- Stores integrity indicators and audit/session data
+### 2. Database Layer
 
-### 4. Document Vault
-- A local directory under the user’s profile
-- Contains managed copies of ingested PDF files
-- Access is governed by the operating system’s file permissions
+-   SQLite file-based database
+-   Schema created and verified via `init_db()`
+-   Defensive migration logic using `PRAGMA table_info`
+-   Tables:
+    -   `documents`
+    -   `sessions`
 
----
+### 3. Ingestion Pipeline
 
-## Runtime Lifecycle
+Document ingestion flow:
 
-1. User launches **PerDocMan.exe**
-2. The executable:
-   - Initializes runtime configuration
-   - Starts the local HTTP server on a random available port
-   - Opens the browser to `http://127.0.0.1:<port>/`
-3. User interacts with the local web interface
-4. On application exit:
-   - The HTTP server is shut down
-   - Database and file handles are closed
-   - Session end time and user information are recorded
+1.  User uploads PDF
+2.  Temporary file created
+3.  SHA-256 hash computed
+4.  Duplicate check performed
+5.  File copied to managed storage
+6.  Preview text extracted (first pages)
+7.  Metadata inserted into SQLite
+8.  User redirected to dashboard
 
----
+------------------------------------------------------------------------
 
-## Data Flow Summary
+## Database Schema
 
-- PDF files are ingested through the local interface
-- Files are copied into the managed vault directory
-- Metadata and integrity data are recorded in SQLite
-- Search requests are translated into SQL queries
-- Results are rendered as local HTML pages
+### documents
 
----
+-   id (INTEGER PRIMARY KEY)
+-   original_filename (TEXT)
+-   stored_path (TEXT)
+-   sha256 (TEXT)
+-   category (TEXT)
+-   tags (TEXT)
+-   doc_date (TEXT)
+-   ingested_at (TEXT)
+-   content_preview (TEXT)
 
-## Design Constraints
+The `content_preview` column supports future semantic indexing.
 
-- Single-user, single-machine operation
-- Local-only network access
-- Prototype-level UI and security controls
-- No reliance on external services or APIs
+### sessions
+
+-   session_id (TEXT PRIMARY KEY)
+-   started_at (TEXT)
+-   ended_at (TEXT)
+-   username (TEXT)
+-   hostname (TEXT)
+-   vault_root (TEXT)
+-   notes (TEXT)
+
+------------------------------------------------------------------------
+
+## Reset Strategy
+
+Due to Windows file locking, the database reset performs a logical wipe:
+
+-   `DELETE FROM documents`
+-   `DELETE FROM sessions`
+
+The schema remains intact to ensure stability during runtime.
+
+------------------------------------------------------------------------
+
+## Security Considerations
+
+-   Duplicate prevention via SHA-256 hashing
+-   Inline PDF serving restricted to stored DB records
+-   No external API exposure
+-   No cloud storage integration
+-   Prototype assumes trusted local environment
+
+------------------------------------------------------------------------
+
+## Future Architectural Enhancements
+
+-   Semantic search via embedding vectors
+-   Vector table integration
+-   Role-based authentication
+-   Encryption-at-rest
+-   REST API abstraction layer
+-   Modular front-end separation

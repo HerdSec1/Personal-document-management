@@ -1,157 +1,123 @@
-# Local-First Personal Document Management System (Prototype)
+# PerDocMan (Personal Document Manager)
 
-## Project Overview
+PerDocMan is a local-first prototype document management system built in
+Python using SQLite. It ingests PDF documents, stores metadata, and
+provides retrieval and preview functionality --- all without cloud
+services.
 
-This repository contains a **design-phase prototype** for a local-first personal document management system intended to explore secure, offline-first handling of sensitive personal documents such as health records, financial statements, legal paperwork, and identification files.
+This project was developed as a senior seminar capstone focused on
+secure, privacy-preserving document indexing and extensible architecture
+for future semantic search integration.
 
-The system is being developed as part of an academic semester project. At this stage, the repository primarily reflects **project structure, design intent, and planned architecture**, rather than a completed or functional application.
+------------------------------------------------------------------------
 
-All data is intended to remain local to the user’s machine. No cloud services, telemetry, or external data sharing are planned.
+## Features
 
----
+### Core Functionality
 
-## Problem Statement
+-   PDF ingestion via web interface
+-   Local storage of files in managed directory
+-   Metadata persistence using SQLite
+-   SHA-256 hashing for duplicate detection
+-   Automatic duplicate prevention
+-   Document listing dashboard
+-   Inline PDF preview in browser
+-   Session tracking for audit purposes
 
-Many individuals manage sensitive personal documents using ad-hoc folder structures or generic cloud storage tools. These approaches often lack consistent organization, meaningful metadata, and basic integrity awareness, while also introducing unnecessary privacy risks.
+### Administrative Controls
 
-This project explores how a **simple, local-first system** can improve document organization and retrieval while applying foundational cybersecurity concepts in a realistic, constrained scope.
+-   Logical database wipe (documents + sessions cleared)
+-   Confirmation prompt for destructive operations
+-   Graceful recovery after reset
 
----
+### Architecture Enhancements
 
-## Project Status
+-   `content_preview` column for semantic-ready indexing
+-   Schema migration logic using `PRAGMA table_info`
+-   Defensive database initialization (`init_db()` safeguards)
 
-**Current Phase:**  
-Early design and repository scaffolding (academic prototype)
+------------------------------------------------------------------------
 
-**Implemented**
-- Repository structure
-- Documentation and design notes
+## System Architecture
 
-**Planned (Not Yet Implemented)**
-- Local ingestion of PDF documents
-- Managed local storage for ingested files
-- Metadata storage using SQLite
-- Basic metadata-based listing and search
-- Simple CLI-based interaction
-- Integrity indicators (e.g., hashes, timestamps)
+-   Language: Python 3.11+
+-   Web Server: BaseHTTPRequestHandler
+-   Database: SQLite (local file-based)
+-   Storage: Local filesystem (`data/documents/`)
+-   Hashing: SHA-256
+-   PDF Parsing: pypdf
 
-**Out of Scope**
-- Multi-user support
-- Cloud synchronization or backups
-- Advanced access control models
-- Compliance certifications or audits
-- Production-grade security guarantees
+All operations are local. No external APIs or cloud services are used.
 
-No functional features are currently implemented. All technical capabilities described in this repository represent **design goals**, not completed functionality.
+------------------------------------------------------------------------
 
----
+## Project Structure
 
-## Intended Functionality (Design Goals)
+src/ │ ├── launcher.py ├── perdocman_server.py ├── db.py ├── ingest.py
+├── reset_db.py └── config.py │ data/ ├── documents.db └── documents/
 
-When implemented, the system is intended to:
+------------------------------------------------------------------------
 
-- Accept local PDF files for ingestion
-- Copy documents into managed local storage using safe filenames
-- Track document metadata (e.g., filename, category, tags) in SQLite
-- Provide basic listing and search over stored metadata
-- Offer a simple command-line interface for interaction
+## Running the Application
 
-These features are aspirational and subject to change as development progresses.
+Activate your virtual environment:
 
----
+    .\.venv\Scripts\activate
 
-## Design Principles
+Run the server:
 
-**Local-First Architecture**  
-All documents and metadata are intended to be stored and processed locally, without reliance on external services.
+    .\.venv\Scripts\python.exe -m src.launcher
 
-**Data Minimization**  
-Only information necessary for organization and retrieval will be collected.
+Then open:
 
-**Transparency and User Control**  
-Users should be able to inspect where data is stored and how it is processed.
+    http://127.0.0.1:<PORT>/
 
----
+------------------------------------------------------------------------
 
-## Planned System Architecture (High-Level)
+## Resetting the Database
 
-The proposed system architecture includes the following conceptual components:
+Use the **Wipe Database** button on the dashboard.
 
-- **Ingestion Module**  
-  Responsible for accepting PDF files and registering them with the system.
+This performs a logical wipe: - Deletes all document records - Deletes
+all session records - Leaves schema intact - Avoids Windows file-lock
+issues
 
-- **Metadata Management**  
-  Stores structured metadata in a local SQLite database.
+------------------------------------------------------------------------
 
-- **Search & Retrieval**  
-  Provides basic metadata-based queries.
+## Current Limitations
 
-- **Storage Layer**  
-  Maintains documents and metadata on local disk in an inspectable format.
+-   No authentication (local prototype only)
+-   No role-based permissions
+-   No full-text or semantic search yet
+-   No individual document delete
+-   No encryption-at-rest
 
-This architecture is intentionally minimal to remain feasible within a single academic term.
+------------------------------------------------------------------------
 
----
+## Future Enhancements
 
-## Security Considerations (Design-Level)
+-   Embedding-based semantic search
+-   Vector storage extension table
+-   Individual document deletion
+-   Authentication layer
+-   Encrypted vault storage
+-   Tag-based filtering and search
+-   REST API abstraction layer
 
-**Intended Protections**
-- Reduced exposure by avoiding cloud services
-- Improved document organization
-- Basic integrity awareness through hashing (planned)
+------------------------------------------------------------------------
 
-**Explicit Non-Goals**
-- Protection against a compromised host OS
-- Defense against malware or malicious local users
-- Physical security of the device
-- Advanced or adversarial threat models
+## Educational Objectives
 
-Security controls are limited by scope and are discussed at a conceptual level only.
+This project demonstrates:
 
----
+-   Secure local-first design principles
+-   Defensive schema initialization
+-   Duplicate prevention via cryptographic hashing
+-   Safe destructive operation handling
+-   Extensible architecture for semantic search
 
-## Installation & Setup
+------------------------------------------------------------------------
 
-No runnable application is currently available.
+## License
 
-This repository is in an early design phase. Installation, setup, and execution instructions will be added once functional components are implemented.
-
----
-
-## Limitations
-
-- No executable functionality at this stage
-- Design-focused documentation only
-- No validated security controls
-- No production readiness
-
-**Disclaimer**  
-This project is an academic prototype and should not be used to manage real sensitive data.
-
----
-
-## Future Work
-
-Potential future work includes (not guaranteed):
-
-- Implementation of ingestion and metadata storage
-- CLI-based interaction
-- SQLite schema refinement
-- Basic integrity indicators
-- Improved documentation and testing
-
----
-
-## Repository Structure
-
-- [`src/`](/src/) – Planned application logic (currently skeletal)
-- [`data/`](/data/) – Intended location for local document storage
-- [`docs/`](/docs/) – Design notes, architecture, and progress documentation
-- [`LICENSE`](/LICENSE) – License information
-- [`README.md`](/README.md) – Project overview and design intent
-
----
-
-## Academic Context
-
-This project is part of a university senior capstone course. It is intended strictly for educational and demonstrative purposes, with an emphasis on thoughtful system design, scope management, and the application of cybersecurity principles in a realistic setting.
+Prototype -- Educational Use Only
