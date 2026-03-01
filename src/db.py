@@ -36,6 +36,13 @@ def init_db(db_path: Path | None = None) -> Path:
             )
         """)
 
+        # Ensure content_preview column exists (semantic-ready migration)
+        cur.execute("PRAGMA table_info(documents);")
+        columns = {row[1] for row in cur.fetchall()}
+
+        if "content_preview" not in columns:
+            cur.execute("ALTER TABLE documents ADD COLUMN content_preview TEXT;")
+
         # Session / audit table (records timeframe + user/device info)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
@@ -61,6 +68,36 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def get_doc_count(db_path: Path) -> int:
+    init_db(db_path=db_path)  # Ensure DB and table exist before counting
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM documents")
+        (count,) = cur.fetchone()
+        return int(count)
+    finally:
+        conn.close()
+
+def list_documents(db_path: Path, limit: int = 50) -> list[tuple]:
+    init_db(db_path=db_path)  # Ensure DB and table exist before querying
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, original_filename, category, tags, doc_date, ingested_at, stored_path, sha256
+            FROM documents
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+        
 def start_session(db_path: Path, vault_root: Path | None = None, notes: str | None = None) -> str:
     """
     Create a new session record and return the session_id.

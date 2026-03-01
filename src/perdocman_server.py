@@ -6,39 +6,10 @@ import sqlite3
 import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
-
+from urllib.parse import urlparse, parse_qs, quote
+from src.reset_db import reset_database
+from src.db import init_db, get_doc_count, list_documents
 from src.ingest import ingest_pdf
-
-
-def get_doc_count(db_path: Path) -> int:
-    conn = sqlite3.connect(db_path)
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM documents")
-        (count,) = cur.fetchone()
-        return int(count)
-    finally:
-        conn.close()
-
-
-def list_documents(db_path: Path, limit: int = 50) -> list[tuple]:
-    conn = sqlite3.connect(db_path)
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT id, original_filename, category, tags, doc_date, ingested_at, stored_path, sha256
-            FROM documents
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (limit,),
-        )
-        return cur.fetchall()
-    finally:
-        conn.close()
-
 
 def _html_escape(value: object) -> str:
     text = "" if value is None else str(value)
@@ -59,11 +30,15 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
 
         if parsed.path == "/":
-            self.handle_dashboard()
+            self.handle_dashboard(parsed.query)
             return
 
         if parsed.path == "/documents":
             self.handle_documents()
+            return
+        
+        if parsed.path == "/doc":
+            self.handle_doc(parsed.query)
             return
 
         self.send_response(404)
@@ -77,39 +52,80 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         if parsed.path == "/ingest":
             self.handle_ingest()
             return
+        
+        if parsed.path == "/reset":
+            self.handle_reset()
+            return
 
         self.send_response(404)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
         self.wfile.write(b"Not Found")
 
-    def handle_dashboard(self) -> None:
+    def handle_reset(self) -> None:
+        from src.reset_db import reset_database
+        from urllib.parse import quote
+        from src.db import init_db
+
+        try:
+            reset_database(db_path=self.db_path)
+            init_db(db_path=self.db_path)
+
+            msg = quote("Database reset successful")
+            self.send_response(303)
+            self.send_header("Location", f"/?level=success&msg={msg}")
+            self.end_headers()
+
+        except Exception as e:
+            msg = quote(f"Reset failed: {e}")
+            self.send_response(303)
+            self.send_header("Location", f"/?level=error&msg={msg}")
+            self.end_headers()
+    
+    def handle_dashboard(self, query: str = "") -> None:
         count = get_doc_count(self.db_path)
         vault = str(self.vault_root) if self.vault_root else "(not set)"
+        params = parse_qs(query)
+        msg = params.get("msg", [""])[0]
+        level = params.get("level", ["info"])[0]  # info|success|error
+
+        banner = ""
+        if msg:
+            safe_msg = _html_escape(msg)
+            safe_level = _html_escape(level)
+            banner = f"<p><strong>{safe_level.upper()}:</strong> {safe_msg}</p><hr/>"
 
         html = f"""<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>PerDocMan</title>
-</head>
-<body>
-  <h1>PerDocMan (Prototype)</h1>
+            <html>
+            <head>
+            <meta charset="utf-8" />
+            <title>PerDocMan</title>
+            </head>
+            <body>
+            <h1>PerDocMan (Prototype)</h1>
+            {banner}
 
-  <p><strong>Documents indexed:</strong> {count}</p>
-  <p><a href="/documents">View documents</a></p>
-  <p><strong>Database:</strong> {_html_escape(self.db_path)}</p>
-  <p><strong>Vault Root:</strong> {_html_escape(vault)}</p>
+            <p><strong>Documents indexed:</strong> {count}</p>
+            <p><a href="/documents">View documents</a></p>
+            <p><strong>Database:</strong> {_html_escape(self.db_path)}</p>
+            <p><strong>Vault Root:</strong> {_html_escape(vault)}</p>
 
-  <hr/>
-  <h2>Upload PDF</h2>
-  <form method="POST" action="/ingest" enctype="multipart/form-data">
-      <input type="file" name="file" accept=".pdf" required />
-      <button type="submit">Ingest</button>
-  </form>
+            <hr/>
+            <h2>Upload PDF</h2>
+            <form method="POST" action="/ingest" enctype="multipart/form-data">
+                <input type="file" name="file" accept=".pdf" required />
+                <button type="submit">Ingest</button>
+            </form>
 
-</body>
-</html>"""
+            <hr/>
+
+            <h2>Admin</h2>
+            <form method="POST" action="/reset" onsubmit="return confirm('Are you sure? This will wipe the database and cannot be undone.');">
+            <button type="submit">Wipe Database</button>
+            </form>
+
+            </body>
+            </html>"""
 
         body = html.encode("utf-8")
         self.send_response(200)
@@ -131,16 +147,17 @@ class PerDocManHandler(BaseHTTPRequestHandler):
                 f"<td>{_html_escape(tags)}</td>"
                 f"<td>{_html_escape(doc_date)}</td>"
                 f"<td>{_html_escape(ingested_at)}</td>"
+                f"<td><a href='/doc?id={doc_id}' target='_blank'>Open</a></td>"
                 "</tr>"
             )
 
         table_html = (
             "<table border='1' cellpadding='6' cellspacing='0'>"
             "<thead><tr>"
-            "<th>ID</th><th>Filename</th><th>Category</th><th>Tags</th><th>Doc Date</th><th>Ingested At</th>"
+            "<th>ID</th><th>Filename</th><th>Category</th><th>Tags</th><th>Doc Date</th><th>Ingested At</th><th>Preview</th>"
             "</tr></thead>"
             "<tbody>"
-            + ("".join(trs) if trs else "<tr><td colspan='6'>(no documents yet)</td></tr>")
+            + ("".join(trs) if trs else "<tr><td colspan='7'>(no documents yet)</td></tr>")
             + "</tbody></table>"
         )
 
@@ -163,6 +180,54 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def handle_doc(self, query: str) -> None:
+        params = parse_qs(query)
+        doc_id_str = params.get("id", [""])[0]
+
+        if not doc_id_str.isdigit():
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(b"Invalid document id")
+            return
+
+        doc_id = int(doc_id_str)
+
+        # Look up stored path in DB
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT stored_path, original_filename FROM documents WHERE id = ?",
+                (doc_id,)
+            )
+            row = cur.fetchone()
+        finally:
+            conn.close()
+
+        if not row:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Document not found")
+            return
+
+        stored_path, original_filename = row
+        path = Path(stored_path)
+
+        if not path.exists():
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"File not found on disk")
+            return
+
+        data = path.read_bytes()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f'inline; filename="{original_filename}"')
+        self.end_headers()
+        self.wfile.write(data)
 
     def handle_ingest(self) -> None:
         form = cgi.FieldStorage(
@@ -209,14 +274,15 @@ class PerDocManHandler(BaseHTTPRequestHandler):
             )
 
             self.send_response(303)
-            self.send_header("Location", "/")
+            self.send_header("Location", "/?level=success&msg=Ingestion%20successful")
             self.end_headers()
 
         except Exception as e:
-            self.send_response(500)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
+    # Redirect back to dashboard with an error message
+            msg = quote(f"Ingestion failed: {e}")
+            self.send_response(303)
+            self.send_header("Location", f"/?level=error&msg={msg}")
             self.end_headers()
-            self.wfile.write(f"Ingestion failed: {e}".encode("utf-8"))
 
         finally:
             if tmp_path is not None:
