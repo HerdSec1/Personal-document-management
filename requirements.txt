@@ -1,1 +1,5 @@
-pytest
+# Runtime dependency
+pypdf>=3.0
+
+# Development / testing
+pytest>=7.0
