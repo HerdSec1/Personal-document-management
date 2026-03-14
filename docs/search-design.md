@@ -1,5 +1,16 @@
 # Search and Indexing Design
 
+## Current Implementation Status
+PerDocMan currently implements keyword search rather than semantic search. The search feature matches against stored document metadata and preview text, including:
+
+- original filename
+- display title
+- category
+- tags
+- content preview
+
+This provides a working retrieval layer for the prototype while keeping the architecture lightweight and fully local. Semantic search remains a future enhancement.
+
 ## Definition of Indexing
 
 In this project, *indexing* refers to the creation of a structured SQLite metadata database and associated database indexes that support efficient retrieval of documents without manual folder traversal.

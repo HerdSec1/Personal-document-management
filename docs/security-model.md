@@ -59,3 +59,15 @@ This is a prototype system, not a hardened security product.
 ## Security Transparency
 
 All security measures and limitations are documented to avoid overstating protection capabilities.
+
+## Why Sensitivity Classification Matters
+Sensitivity classification helps PerDocMan distinguish between documents that carry different levels of privacy, financial, legal, or identity risk. For example, a product warranty and a passport should not be treated as equivalent from a user awareness or lifecycle standpoint.
+
+In the current prototype, sensitivity labels support:
+
+- prioritization of high-risk documents
+- dashboard summaries and future alerts
+- more meaningful search and filtering
+- future policy enforcement such as encryption, retention rules, or restricted access workflows
+
+Sensitivity classification is not itself a security control. It does not prevent access, encrypt files, or enforce permissions on its own. Instead, it provides a decision-making layer that allows the system to apply smarter handling in later versions.

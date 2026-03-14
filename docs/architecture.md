@@ -24,6 +24,7 @@ Core architectural principles:
 -   Handles routing for:
     -   Dashboard (`/`)
     -   Document list (`/documents`)
+    -   Document search (`/search?q=...`)
     -   Document preview (`/doc?id=...`)
     -   Ingestion (`/ingest`)
     -   Reset (`/reset`)
@@ -42,13 +43,14 @@ Core architectural principles:
 Document ingestion flow:
 
 1.  User uploads PDF
-2.  Temporary file created
-3.  SHA-256 hash computed
-4.  Duplicate check performed
+2.  Temporary file created using the original uploaded filename
+3.  SHA-256 hash computed from the source file
+4.  Duplicate check performed before managed storage copy
 5.  File copied to managed storage
 6.  Preview text extracted (first pages)
-7.  Metadata inserted into SQLite
-8.  User redirected to dashboard
+7.  Display title derived from filename and/or preview text
+8. Metadata inserted into SQLite
+9.  User redirected to dashboard
 
 ------------------------------------------------------------------------
 
@@ -65,6 +67,9 @@ Document ingestion flow:
 -   doc_date (TEXT)
 -   ingested_at (TEXT)
 -   content_preview (TEXT)
+-   sensitivity (TEXT)
+-   expires_at (TEXT)
+-   display_title (TEXT)
 
 The `content_preview` column supports future semantic indexing.
 
@@ -98,6 +103,7 @@ The schema remains intact to ensure stability during runtime.
 -   No external API exposure
 -   No cloud storage integration
 -   Prototype assumes trusted local environment
+-   Sensitivity classification supports document triage, prioritization, and future policy enforcement, but is not itself a security boundary
 
 ------------------------------------------------------------------------
 

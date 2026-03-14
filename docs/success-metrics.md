@@ -50,3 +50,17 @@ Success will be demonstrated through:
 ## Evaluation Scope
 
 These metrics are intended for academic evaluation of a prototype system and are not benchmarks for production deployment.
+
+---
+
+## Sensitivity Classification Value
+Sensitivity classification improves the usefulness of the system by helping users recognize which documents require greater care or attention. Documents with higher sensitivity (for example passports, tax returns, or medical records) can be surfaced more prominently in dashboards, alerts, and lifecycle reviews.
+
+The goal is not only storage but awareness. By categorizing documents based on sensitivity, the system can eventually support:
+
+- prioritized review of high-risk documents
+- expiration monitoring for identity documents
+- differentiated retention policies
+- stronger protection mechanisms for critical records
+
+Even in the prototype stage, sensitivity classification demonstrates how metadata can drive smarter document management.
