@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-import shutil
 import sqlite3
 import uuid
+import shutil
 from pathlib import Path
 from pypdf import PdfReader
 
@@ -39,14 +39,29 @@ def extract_preview_text(pdf_path: Path, *, char_limit: int = 1000, max_pages: i
     except Exception:
         return None
 
+def derive_display_title(original_filename: str, content_preview: str | None) -> str:
+    """
+    Prefer a human-readable title from the document text preview.
+    Falls back to the original filename.
+    """
+    if content_preview:
+        for line in content_preview.splitlines():
+            line = line.strip()
+            if line:
+                return line[:80]
+    return original_filename
+
 def ingest_pdf(
     source_pdf: Path,
     *,
+    original_filename: str | None = None,
     db_path: Path | None = None,
     storage_dir: Path | None = None,
     category: str | None = None,
     tags: str | None = None,
     doc_date: str | None = None,
+    sensitivity: str | None = None,
+    expires_at: str | None = None,
 ) -> int:
     """
     Ingest a PDF by copying it into managed local storage and recording metadata in SQLite.
@@ -73,54 +88,38 @@ def ingest_pdf(
 
     # Create a safe non-overwriting filename
     # Example: "statement_2024__a1b2c3d4.pdf"
+    metadata_filename = original_filename or source_pdf.name
     stem = source_pdf.stem
     safe_stem = "".join(c for c in stem if c.isalnum() or c in ("-", "_", " ")).strip().replace(" ", "_")
     suffix = uuid.uuid4().hex[:8]
     stored_filename = f"{safe_stem}__{suffix}.pdf"
     stored_path = storage_dir / stored_filename
 
-    # Copy file
-    shutil.copy2(source_pdf, stored_path)
-
     # Hash after copy (hashing either source or stored is fine; stored proves integrity of what we keep)
-    file_hash = sha256_file(stored_path)
+    file_hash = sha256_file(source_pdf)
 
-    # Check for duplicate by SHA-256
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT id FROM documents WHERE sha256 = ?",
-        (file_hash,)
-    )
-    existing = cur.fetchone()
-
-    if existing:
-        conn.close()
-        # Option 1: Raise an error
-        raise ValueError(f"This document has already been imported (ID {existing[0]}).")
-
-    # Insert metadata row
     conn = sqlite3.connect(db_path)
     try:
         cur = conn.cursor()
 
-        # Check for duplicate by hash
-        cur.execute(
-            "SELECT id FROM documents WHERE sha256 = ?",
-            (file_hash,)
-        )
+        # Duplicate check (single place)
+        cur.execute("SELECT id FROM documents WHERE sha256 = ?", (file_hash,))
         existing = cur.fetchone()
-
         if existing:
-            raise ValueError(
-                f"This document has already been imported (ID {existing[0]})."
-            )
+            raise ValueError(f"This document has already been imported (ID {existing[0]}).")
 
-        content_preview = extract_preview_text(stored_path)
+        shutil.copy2(source_pdf, stored_path)
+
+        content_preview = extract_preview_text(source_pdf)
+        display_title = derive_display_title(metadata_filename, content_preview)
+
+        sensitivity = (sensitivity or "moderate").strip().lower()
+        expires_at = expires_at.strip() if expires_at else None
 
         cur.execute(
             """
             INSERT INTO documents (
+                display_title,
                 original_filename,
                 stored_path,
                 sha256,
@@ -128,12 +127,15 @@ def ingest_pdf(
                 tags,
                 doc_date,
                 ingested_at,
-                content_preview
+                content_preview,
+                sensitivity,
+                expires_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                source_pdf.name,
+                display_title,
+                metadata_filename,
                 str(stored_path),
                 file_hash,
                 category,
@@ -141,6 +143,8 @@ def ingest_pdf(
                 doc_date,
                 utc_now_iso(),
                 content_preview,
+                sensitivity,
+                expires_at,
             ),
         )
 

@@ -43,6 +43,19 @@ def init_db(db_path: Path | None = None) -> Path:
         if "content_preview" not in columns:
             cur.execute("ALTER TABLE documents ADD COLUMN content_preview TEXT;")
 
+        # Ensure lifecycle + sensitivity columns exist (v0.3)
+        cur.execute("PRAGMA table_info(documents);")
+        columns = {row[1] for row in cur.fetchall()}
+
+        if "sensitivity" not in columns:
+            cur.execute("ALTER TABLE documents ADD COLUMN sensitivity TEXT;")
+
+        if "expires_at" not in columns:
+            cur.execute("ALTER TABLE documents ADD COLUMN expires_at TEXT;")
+
+        if "display_title" not in columns:
+            cur.execute("ALTER TABLE documents ADD COLUMN display_title TEXT;")
+
         # Session / audit table (records timeframe + user/device info)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
@@ -67,6 +80,44 @@ def utc_now_iso() -> str:
     """Convenience helper for ISO timestamps (UTC)."""
     return datetime.now(timezone.utc).isoformat()
 
+def list_expiring_documents(db_path: Path, days: int = 60, limit: int = 10) -> list[tuple]:
+    init_db(db_path=db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, display_title, sensitivity, expires_at
+            FROM documents
+            WHERE expires_at IS NOT NULL
+              AND expires_at != ''
+              AND date(expires_at) <= date('now', ?)
+            ORDER BY date(expires_at) ASC
+            LIMIT ?
+            """,
+            (f"+{days} day", limit),
+        )
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def sensitivity_counts(db_path: Path) -> list[tuple]:
+    init_db(db_path=db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT COALESCE(sensitivity, 'unspecified') as sensitivity, COUNT(*)
+            FROM documents
+            GROUP BY COALESCE(sensitivity, 'unspecified')
+            ORDER BY COUNT(*) DESC
+            """
+        )
+        return cur.fetchall()
+    finally:
+        conn.close()
 
 def get_doc_count(db_path: Path) -> int:
     init_db(db_path=db_path)  # Ensure DB and table exist before counting
@@ -86,7 +137,7 @@ def list_documents(db_path: Path, limit: int = 50) -> list[tuple]:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT id, original_filename, category, tags, doc_date, ingested_at, stored_path, sha256
+            SELECT id, display_title, category, tags, doc_date, ingested_at, stored_path, sha256
             FROM documents
             ORDER BY id DESC
             LIMIT ?
@@ -104,6 +155,7 @@ def start_session(db_path: Path, vault_root: Path | None = None, notes: str | No
     This is intended to run when PerDocMan starts.
     """
     session_id = uuid.uuid4().hex
+    init_db(db_path=db_path)  # Ensure DB and table exist before inserting
     conn = sqlite3.connect(db_path)
     try:
         cur = conn.cursor()
@@ -133,6 +185,7 @@ def end_session(db_path: Path, session_id: str) -> None:
     Mark a session as ended. Safe to call once (won't overwrite an existing ended_at).
     Intended to run when PerDocMan exits.
     """
+    init_db(db_path=db_path)  # Ensure DB and table exist before updating
     conn = sqlite3.connect(db_path)
     try:
         cur = conn.cursor()
@@ -145,5 +198,38 @@ def end_session(db_path: Path, session_id: str) -> None:
             (utc_now_iso(), session_id),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+def search_documents(db_path: Path, query: str, limit: int = 50) -> list[tuple]:
+    """
+    Basic keyword search across document metadata and preview text.
+    """
+    init_db(db_path=db_path)
+    conn = sqlite3.connect(db_path)
+
+    try:
+        cur = conn.cursor()
+
+        like = f"%{query}%"
+
+        cur.execute(
+            """
+            SELECT id, display_title, category, tags, doc_date, ingested_at, stored_path, sha256
+            FROM documents
+            WHERE
+                original_filename LIKE ?
+                OR display_title LIKE ?
+                OR category LIKE ?
+                OR tags LIKE ?
+                OR content_preview LIKE ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (like, like, like, like, like, limit),
+        )
+
+        return cur.fetchall()
+
     finally:
         conn.close()

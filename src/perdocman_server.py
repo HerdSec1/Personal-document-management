@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, quote
 from src.reset_db import reset_database
-from src.db import init_db, get_doc_count, list_documents
+from src.db import get_doc_count, list_documents, sensitivity_counts, search_documents
 from src.ingest import ingest_pdf
 
 def _html_escape(value: object) -> str:
@@ -37,6 +37,10 @@ class PerDocManHandler(BaseHTTPRequestHandler):
             self.handle_documents()
             return
         
+        if parsed.path == "/search":
+            self.handle_search(parsed.query)
+            return
+
         if parsed.path == "/doc":
             self.handle_doc(parsed.query)
             return
@@ -83,11 +87,39 @@ class PerDocManHandler(BaseHTTPRequestHandler):
             self.end_headers()
     
     def handle_dashboard(self, query: str = "") -> None:
+        from src.db import init_db, get_doc_count, list_documents, sensitivity_counts, list_expiring_documents
+        
         count = get_doc_count(self.db_path)
         vault = str(self.vault_root) if self.vault_root else "(not set)"
         params = parse_qs(query)
         msg = params.get("msg", [""])[0]
         level = params.get("level", ["info"])[0]  # info|success|error
+        expiring = list_expiring_documents(self.db_path, days=365, limit=10)
+        exp_trs = []
+        for (doc_id, display_title, sensitivity, expires_at) in expiring:
+            exp_trs.append(
+                "<tr>"
+                f"<td>{doc_id}</td>"
+                f"<td>{_html_escape(display_title)}</td>"
+                f"<td>{_html_escape(sensitivity or '')}</td>"
+                f"<td>{_html_escape(expires_at or '')}</td>"
+                f"<td><a href='/doc?id={doc_id}' target='_blank'>Open</a></td>"
+                "</tr>"
+            )
+
+        exp_table = (
+            "<table border='1' cellpadding='5'>"
+            "<tr><th>ID</th><th>Filename</th><th>Sensitivity</th><th>Expires</th><th>Preview</th></tr>"
+            + ("".join(exp_trs) if exp_trs else "<tr><td colspan='5'>(no expiring documents)</td></tr>")
+            + "</table>"
+        )
+
+        sens_counts = sensitivity_counts(self.db_path)
+        sens_items = []
+        for (sens, n) in sens_counts:
+            sens_items.append(f"<li><strong>{_html_escape(sens)}</strong>: {n}</li>")
+        sens_html = "<ul>" + "".join(sens_items) + "</ul>" if sens_items else "<p>(no documents yet)</p>"
+
 
         banner = ""
         if msg:
@@ -107,6 +139,12 @@ class PerDocManHandler(BaseHTTPRequestHandler):
 
             <p><strong>Documents indexed:</strong> {count}</p>
             <p><a href="/documents">View documents</a></p>
+            <h2>Search</h2>
+            <form method="GET" action="/search">
+                <input type="text" name="q" placeholder="Search documents" />
+                <button type="submit">Search</button>
+            </form>
+            
             <p><strong>Database:</strong> {_html_escape(self.db_path)}</p>
             <p><strong>Vault Root:</strong> {_html_escape(vault)}</p>
 
@@ -114,10 +152,33 @@ class PerDocManHandler(BaseHTTPRequestHandler):
             <h2>Upload PDF</h2>
             <form method="POST" action="/ingest" enctype="multipart/form-data">
                 <input type="file" name="file" accept=".pdf" required />
-                <button type="submit">Ingest</button>
+
+                <br/><br/>
+                <label>Sensitivity:
+                    <select name="sensitivity">
+                    <option value="low">low</option>
+                    <option value="moderate" selected>moderate</option>
+                    <option value="high">high</option>
+                    <option value="critical">critical</option>
+                    </select>
+                </label>
+
+                <br/><br/>
+                <label>Expires At (YYYY-MM-DD):
+                    <input type="text" name="expires_at" placeholder="2026-12-31" />
+                </label>
+
+                <br/><br/>
+                <button type="submit">Upload</button>
             </form>
 
             <hr/>
+
+            <h2>Sensitivity Summary</h2>
+            {sens_html}
+
+            <h2>Expiring Soon (Next 60 Days)</h2>
+            {exp_table}
 
             <h2>Admin</h2>
             <form method="POST" action="/reset" onsubmit="return confirm('Are you sure? This will wipe the database and cannot be undone.');">
@@ -126,6 +187,68 @@ class PerDocManHandler(BaseHTTPRequestHandler):
 
             </body>
             </html>"""
+
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_search(self, query: str) -> None:
+        params = parse_qs(query)
+        q = params.get("q", [""])[0].strip()
+
+        rows = search_documents(self.db_path, q, limit=50) if q else []
+
+        trs: list[str] = []
+        for (doc_id, display_title, category, tags, doc_date, ingested_at, stored_path, sha256) in rows:
+            trs.append(
+                "<tr>"
+                f"<td>{doc_id}</td>"
+                f"<td>{_html_escape(display_title)}</td>"
+                f"<td>{_html_escape(category)}</td>"
+                f"<td>{_html_escape(tags)}</td>"
+                f"<td>{_html_escape(doc_date)}</td>"
+                f"<td>{_html_escape(ingested_at)}</td>"
+                f"<td><a href='/doc?id={doc_id}' target='_blank'>Open</a></td>"
+                "</tr>"
+            )
+
+        table_html = (
+            "<table border='1' cellpadding='6' cellspacing='0'>"
+            "<thead><tr>"
+            "<th>ID</th><th>Filename</th><th>Category</th><th>Tags</th><th>Doc Date</th><th>Ingested At</th><th>Preview</th>"
+            "</tr></thead>"
+            "<tbody>"
+            + (
+                "".join(trs)
+                if trs
+                else "<tr><td colspan='7'>(no matching documents)</td></tr>"
+            )
+            + "</tbody></table>"
+        )
+
+        html = f"""<!doctype html>
+    <html>
+    <head>
+    <meta charset="utf-8" />
+    <title>PerDocMan - Search</title>
+    </head>
+    <body>
+    <h1>Search Documents</h1>
+    <p><a href="/">← Back to Dashboard</a></p>
+
+    <form method="GET" action="/search">
+        <input type="text" name="q" value="{_html_escape(q)}" placeholder="Search documents" />
+        <button type="submit">Search</button>
+    </form>
+
+    <br/>
+    <p><strong>Query:</strong> {_html_escape(q) if q else "(empty)"}</p>
+    {table_html}
+    </body>
+    </html>"""
 
         body = html.encode("utf-8")
         self.send_response(200)
@@ -256,21 +379,37 @@ class PerDocManHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"No file selected")
             return
 
+        sensitivity = None
+        expires_at = None
+
+        if "sensitivity" in form:
+            sensitivity = form.getfirst("sensitivity")
+
+        if "expires_at" in form:
+            expires_at = form.getfirst("expires_at")
+
         tmp_path: Path | None = None
+        tmpdir: str | None = None
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmpdir = tempfile.mkdtemp()
+            safe_name = Path(filename).name
+            tmp_path = Path(tmpdir) / safe_name
+
+            with open(tmp_path, "wb") as tmp:
                 shutil.copyfileobj(file_item.file, tmp)
-                tmp_path = Path(tmp.name)
 
             storage_dir = (self.vault_root / "documents") if self.vault_root else (Path("data") / "documents")
             storage_dir.mkdir(parents=True, exist_ok=True)
 
             ingest_pdf(
                 tmp_path,
+                original_filename=filename,
                 db_path=self.db_path,
                 storage_dir=storage_dir,
                 category="manual_upload",
                 tags="uploaded",
+                sensitivity=sensitivity,
+                expires_at=expires_at,
             )
 
             self.send_response(303)
@@ -287,6 +426,8 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         finally:
             if tmp_path is not None:
                 tmp_path.unlink(missing_ok=True)
+            if tmpdir is not None:
+                shutil.rmtree(tmpdir, ignore_errors=True)
 
     # Keep the console clean
     def log_message(self, format: str, *args) -> None:
