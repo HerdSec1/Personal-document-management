@@ -15,3 +15,9 @@ data/*
 
 # Windows noise
 Thumbs.db
+
+# Local test documents
+*_Test.pdf
+
+# Local development patches/backups
+*.patch
