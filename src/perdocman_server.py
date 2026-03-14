@@ -44,6 +44,10 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         if parsed.path == "/doc":
             self.handle_doc(parsed.query)
             return
+        
+        if parsed.path == "/doc_raw":
+            self.handle_doc_raw(parsed.query)
+            return
 
         self.send_response(404)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -142,6 +146,13 @@ class PerDocManHandler(BaseHTTPRequestHandler):
             <h2>Search</h2>
             <form method="GET" action="/search">
                 <input type="text" name="q" placeholder="Search documents" />
+                <select name="sensitivity">
+                    <option value="">Any sensitivity</option>
+                    <option value="low">low</option>
+                    <option value="moderate">moderate</option>
+                    <option value="high">high</option>
+                    <option value="critical">critical</option>
+                </select>
                 <button type="submit">Search</button>
             </form>
             
@@ -198,11 +209,26 @@ class PerDocManHandler(BaseHTTPRequestHandler):
     def handle_search(self, query: str) -> None:
         params = parse_qs(query)
         q = params.get("q", [""])[0].strip()
+        sens = params.get("sensitivity", [""])[0].strip().lower()
 
-        rows = search_documents(self.db_path, q, limit=50) if q else []
-
+        rows = search_documents(self.db_path, q, limit=200) if q else list_documents(self.db_path, limit=200)
+        
         trs: list[str] = []
         for (doc_id, display_title, category, tags, doc_date, ingested_at, stored_path, sha256) in rows:
+            if sens:
+                conn = sqlite3.connect(self.db_path)
+                try:
+                    cur = conn.cursor()
+                    cur.execute("SELECT sensitivity FROM documents WHERE id = ?", (doc_id,))
+                    r = cur.fetchone()
+                finally:
+                    conn.close()
+
+                doc_sens = (r[0] or "").lower() if r else ""
+                tiers = ["low", "moderate", "high", "critical"]
+
+                if doc_sens not in tiers or tiers.index(doc_sens) < tiers.index(sens):
+                    continue
             trs.append(
                 "<tr>"
                 f"<td>{doc_id}</td>"
@@ -241,8 +267,15 @@ class PerDocManHandler(BaseHTTPRequestHandler):
 
     <form method="GET" action="/search">
         <input type="text" name="q" value="{_html_escape(q)}" placeholder="Search documents" />
+        <select name="sensitivity">
+            <option value="">Any sensitivity</option>
+            <option value="low" {"selected" if sens == "low" else ""}>low</option>
+            <option value="moderate" {"selected" if sens == "moderate" else ""}>moderate</option>
+            <option value="high" {"selected" if sens == "high" else ""}>high</option>
+            <option value="critical" {"selected" if sens == "critical" else ""}>critical</option>
+        </select>
         <button type="submit">Search</button>
-    </form>
+        </form>
 
     <br/>
     <p><strong>Query:</strong> {_html_escape(q) if q else "(empty)"}</p>
@@ -261,11 +294,11 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         rows = list_documents(self.db_path, limit=50)
 
         trs: list[str] = []
-        for (doc_id, original_filename, category, tags, doc_date, ingested_at, stored_path, sha256) in rows:
+        for (doc_id, display_title, category, tags, doc_date, ingested_at, stored_path, sha256) in rows:
             trs.append(
                 "<tr>"
                 f"<td>{doc_id}</td>"
-                f"<td>{_html_escape(original_filename)}</td>"
+                f"<td>{_html_escape(display_title)}</td>"
                 f"<td>{_html_escape(category)}</td>"
                 f"<td>{_html_escape(tags)}</td>"
                 f"<td>{_html_escape(doc_date)}</td>"
@@ -321,6 +354,80 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         try:
             cur = conn.cursor()
             cur.execute(
+                "SELECT stored_path, original_filename, sensitivity FROM documents WHERE id = ?",
+                (doc_id,)
+            )
+            row = cur.fetchone()
+        finally:
+            conn.close()
+
+        if not row:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Document not found")
+            return
+
+        stored_path, original_filename, sensitivity = row
+        path = Path(stored_path)
+
+        if not path.exists():
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"File not found on disk")
+            return
+
+        if (sensitivity or "").lower() in {"high", "critical"}:
+            safe_name = _html_escape(original_filename)
+            safe_sensitivity = _html_escape(sensitivity)
+
+            html = f"""<!doctype html>
+        <html>
+        <head>
+        <meta charset="utf-8" />
+        <title>Sensitivity Warning</title>
+        </head>
+        <body>
+        <h1>Sensitivity Warning</h1>
+        <p>This document is classified as <strong>{safe_sensitivity}</strong>.</p>
+        <p>You are about to open: <strong>{safe_name}</strong></p>
+        <p><a href="/doc_raw?id={doc_id}" target="_blank">Continue to document</a></p>
+        <p><a href="/documents">Back to documents</a></p>
+        </body>
+        </html>"""
+
+            body = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        data = path.read_bytes()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f'inline; filename="{original_filename}"')
+        self.end_headers()
+        self.wfile.write(data)
+
+    def handle_doc_raw(self, query: str) -> None:
+        params = parse_qs(query)
+        doc_id_str = params.get("id", [""])[0]
+
+        if not doc_id_str.isdigit():
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(b"Invalid document id")
+            return
+
+        doc_id = int(doc_id_str)
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cur = conn.cursor()
+            cur.execute(
                 "SELECT stored_path, original_filename FROM documents WHERE id = ?",
                 (doc_id,)
             )
@@ -351,7 +458,7 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Disposition", f'inline; filename="{original_filename}"')
         self.end_headers()
         self.wfile.write(data)
-
+    
     def handle_ingest(self) -> None:
         form = cgi.FieldStorage(
             fp=self.rfile,
