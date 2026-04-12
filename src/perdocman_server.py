@@ -103,6 +103,30 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         msg = params.get("msg", [""])[0]
         level = params.get("level", ["info"])[0]
 
+        sens_counts = sensitivity_counts(self.db_path)
+
+        stats = {
+            "low": 0,
+            "moderate": 0,
+            "high": 0,
+            "critical": 0,
+        }
+
+        for (sens, n) in sens_counts:
+            key = (sens or "").lower()
+            if key in stats:
+                stats[key] = n
+
+        stats_html = (
+            "<div class='row g-2'>"
+            f"<div class='col-6'><div class='border rounded p-2'><div class='text-muted small'>Total</div><div class='fw-semibold'>{count}</div></div></div>"
+            f"<div class='col-6'><div class='border rounded p-2'><div class='text-muted small'>Low</div><div class='fw-semibold'>{stats['low']}</div></div></div>"
+            f"<div class='col-6'><div class='border rounded p-2'><div class='text-muted small'>Moderate</div><div class='fw-semibold'>{stats['moderate']}</div></div></div>"
+            f"<div class='col-6'><div class='border rounded p-2'><div class='text-muted small'>High</div><div class='fw-semibold'>{stats['high']}</div></div></div>"
+            f"<div class='col-12'><div class='border rounded p-2'><div class='text-muted small'>Critical</div><div class='fw-semibold'>{stats['critical']}</div></div></div>"
+            "</div>"
+        )
+
         expiring = list_expiring_documents(self.db_path, days=365, limit=10)
         exp_trs: list[str] = []
         for (doc_id, display_title, sensitivity, expires_at) in expiring:
@@ -124,7 +148,6 @@ class PerDocManHandler(BaseHTTPRequestHandler):
             + "</tbody></table>"
         )
 
-        sens_counts = sensitivity_counts(self.db_path)
         sens_items: list[str] = []
         for (sens, n) in sens_counts:
             raw_sens = (sens or "").lower()
@@ -161,8 +184,7 @@ class PerDocManHandler(BaseHTTPRequestHandler):
             template
             .replace("{{banner}}", banner)
             .replace("{{count}}", str(count))
-            .replace("{{db_path}}", html_escape(self.db_path))
-            .replace("{{vault}}", html_escape(vault))
+            .replace("{{stats_html}}", stats_html)
             .replace("{{sens_html}}", sens_html)
             .replace("{{exp_table}}", exp_table)
         )
@@ -205,6 +227,17 @@ class PerDocManHandler(BaseHTTPRequestHandler):
                 "</tr>"
             )
 
+        result_count = len(trs)
+
+        if q and sens:
+            results_summary = f'Showing {result_count} result(s) for "{html_escape(q)}" with sensitivity filter "{html_escape(sens)}".'
+        elif q:
+            results_summary = f'Showing {result_count} result(s) for "{html_escape(q)}".'
+        elif sens:
+            results_summary = f'Showing {result_count} result(s) with sensitivity filter "{html_escape(sens)}".'
+        else:
+            results_summary = f"Showing {result_count} document(s)."
+
         results_table = (
             "<table class='table table-striped table-hover align-middle'>"
             "<thead><tr>"
@@ -218,6 +251,7 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         html = (
             template
             .replace("{{query}}", html_escape(q))
+            .replace("{{results_summary}}", results_summary)
             .replace("{{results_table}}", results_table)
             .replace("{{low_selected}}", "selected" if sens == "low" else "")
             .replace("{{moderate_selected}}", "selected" if sens == "moderate" else "")
@@ -393,7 +427,7 @@ class PerDocManHandler(BaseHTTPRequestHandler):
             storage_dir = (self.vault_root / "documents") if self.vault_root else (Path("data") / "documents")
             storage_dir.mkdir(parents=True, exist_ok=True)
 
-            ingest_pdf(
+            doc_id = ingest_pdf(
                 tmp_path,
                 original_filename=filename,
                 db_path=self.db_path,
@@ -404,8 +438,10 @@ class PerDocManHandler(BaseHTTPRequestHandler):
                 expires_at=expires_at,
             )
 
+            msg = quote(f'Imported "{filename}" successfully (ID {doc_id})')
+
             self.send_response(303)
-            self.send_header("Location", "/?level=success&msg=Ingestion%20successful")
+            self.send_header("Location", f"/?level=success&msg={msg}")
             self.end_headers()
 
         except Exception as e:
