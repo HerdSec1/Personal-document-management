@@ -4,6 +4,10 @@ import cgi
 import shutil
 import sqlite3
 import tempfile
+import hashlib
+import hmac
+import secrets
+from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
@@ -30,8 +34,87 @@ class PerDocManHandler(BaseHTTPRequestHandler):
     db_path: Path = Path("data") / "documents.db"
     vault_root: Path | None = None
 
+    app_password_hash: bytes = b""
+    app_password_salt: bytes = b""
+    sessions: dict[str, bool] = {}
+
+    def get_session_token(self) -> str | None:
+        cookie_header = self.headers.get("Cookie")
+        if not cookie_header:
+            return None
+
+        jar = cookies.SimpleCookie()
+        jar.load(cookie_header)
+
+        if "perdocman_session" not in jar:
+            return None
+
+        return jar["perdocman_session"].value
+
+    def is_authenticated(self) -> bool:
+        token = self.get_session_token()
+        return bool(token and token in self.sessions)    
+
+    def redirect(self, location: str) -> None:
+        self.send_response(303)
+        self.send_header("Location", location)
+        self.end_headers()    
+
+    def render_login(self, message: str = "", level: str = "info") -> None:
+        banner = ""
+        if message:
+            alert_class = "danger" if level == "error" else "primary"
+            banner = (
+                f'<div class="alert alert-{alert_class}" role="alert">'
+                f"{html_escape(message)}"
+                f"</div>"
+            )
+
+        render_page(
+            self,
+            "login.html",
+            {
+                "banner": banner,
+            },
+        )
+
+        @classmethod
+    def hash_password(cls, password: str, salt: bytes) -> bytes:
+        return hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            salt,
+            200_000,
+        )
+
+    @classmethod
+    def set_password(cls, password: str) -> None:
+        cls.app_password_salt = secrets.token_bytes(16)
+        cls.app_password_hash = cls.hash_password(password, cls.app_password_salt)
+
+    @classmethod
+    def verify_password(cls, password: str) -> bool:
+        if not cls.app_password_hash or not cls.app_password_salt:
+            return False
+
+        candidate_hash = cls.hash_password(password, cls.app_password_salt)
+        return hmac.compare_digest(candidate_hash, cls.app_password_hash)
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+
+        if parsed.path == "/login":
+            self.handle_login_page(parsed.query)
+            return
+
+        if parsed.path == "/logout":
+            self.handle_logout()
+            return
+
+        protected_paths = {"/", "/documents", "/search", "/doc", "/doc_raw"}
+        if parsed.path in protected_paths and not self.is_authenticated():
+            self.redirect("/login")
+            return
 
         if parsed.path == "/":
             self.handle_dashboard(parsed.query)
@@ -54,9 +137,17 @@ class PerDocManHandler(BaseHTTPRequestHandler):
             return
 
         self.render_error("Not Found", "The requested page could not be found.", status=404)
-
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+
+        if parsed.path == "/login":
+            self.handle_login_submit()
+            return
+
+        protected_paths = {"/ingest", "/reset"}
+        if parsed.path in protected_paths and not self.is_authenticated():
+            self.redirect("/login")
+            return
 
         if parsed.path == "/ingest":
             self.handle_ingest()
@@ -94,6 +185,46 @@ class PerDocManHandler(BaseHTTPRequestHandler):
             self.send_response(303)
             self.send_header("Location", f"/?level=error&msg={msg}")
             self.end_headers()
+
+    def handle_login_page(self, query: str = "") -> None:
+        params = parse_qs(query)
+        msg = params.get("msg", [""])[0]
+        level = params.get("level", ["info"])[0]
+
+        if self.is_authenticated():
+            self.redirect("/")
+            return
+
+        self.render_login(message=msg, level=level)
+
+    def handle_login_submit(self) -> None:
+        content_length = int(self.headers.get("Content-Length", "0"))
+        raw_body = self.rfile.read(content_length).decode("utf-8")
+        params = parse_qs(raw_body)
+
+        password = params.get("password", [""])[0]
+
+        if not self.verify_password(password):
+            self.redirect("/login?level=error&msg=Invalid%20password")
+            return
+
+        token = secrets.token_urlsafe(32)
+        self.sessions[token] = True
+
+        self.send_response(303)
+        self.send_header("Location", "/")
+        self.send_header("Set-Cookie", f"perdocman_session={token}; HttpOnly; Path=/; SameSite=Lax")
+        self.end_headers()
+
+    def handle_logout(self) -> None:
+        token = self.get_session_token()
+        if token and token in self.sessions:
+            del self.sessions[token]
+
+        self.send_response(303)
+        self.send_header("Location", "/login?level=info&msg=Logged%20out")
+        self.send_header("Set-Cookie", "perdocman_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax")
+        self.end_headers()
 
     def handle_dashboard(self, query: str = "") -> None:
         count = get_doc_count(self.db_path)
@@ -463,4 +594,5 @@ class PerDocManHandler(BaseHTTPRequestHandler):
 def make_server(host: str, port: int, *, db_path: Path, vault_root: Path | None = None) -> ThreadingHTTPServer:
     PerDocManHandler.db_path = db_path
     PerDocManHandler.vault_root = vault_root
+    PerDocManHandler.set_password("changeme123")
     return ThreadingHTTPServer((host, port), PerDocManHandler)
