@@ -10,6 +10,7 @@ import secrets
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, quote, urlparse
 
 from src.template_utils import (
@@ -36,7 +37,8 @@ class PerDocManHandler(BaseHTTPRequestHandler):
 
     app_password_hash: bytes = b""
     app_password_salt: bytes = b""
-    sessions: dict[str, bool] = {}
+    sessions: dict[str, float] = {}
+    auth_log_path: Path = Path("data") / "auth.log"
 
     def get_session_token(self) -> str | None:
         cookie_header = self.headers.get("Cookie")
@@ -59,6 +61,14 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         self.send_response(303)
         self.send_header("Location", location)
         self.end_headers()    
+
+    def log_auth_event(self, event: str) -> None:
+        self.auth_log_path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).isoformat()
+        client_ip = self.client_address[0] if self.client_address else "unknown"
+
+        with self.auth_log_path.open("a", encoding="utf-8") as f:
+            f.write(f"{timestamp} {event} from {client_ip}\n")
 
     def render_login(self, message: str = "", level: str = "info") -> None:
         banner = ""
@@ -205,11 +215,13 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         password = params.get("password", [""])[0]
 
         if not self.verify_password(password):
+            self.log_auth_event("FAILED_LOGIN")
             self.redirect("/login?level=error&msg=Invalid%20password")
             return
 
         token = secrets.token_urlsafe(32)
         self.sessions[token] = True
+        self.log_auth_event("SUCCESSFUL_LOGIN")
 
         self.send_response(303)
         self.send_header("Location", "/")
@@ -220,6 +232,8 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         token = self.get_session_token()
         if token and token in self.sessions:
             del self.sessions[token]
+
+        self.log_auth_event("LOGGED_OUT")
 
         self.send_response(303)
         self.send_header("Location", "/login?level=info&msg=Logged%20out")
