@@ -7,6 +7,7 @@ import tempfile
 import hashlib
 import hmac
 import secrets
+import time
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -39,6 +40,7 @@ class PerDocManHandler(BaseHTTPRequestHandler):
     app_password_salt: bytes = b""
     sessions: dict[str, float] = {}
     auth_log_path: Path = Path("data") / "auth.log"
+    session_timeout_seconds: int = 1800  # 30 minutes
 
     def get_session_token(self) -> str | None:
         cookie_header = self.headers.get("Cookie")
@@ -55,8 +57,22 @@ class PerDocManHandler(BaseHTTPRequestHandler):
 
     def is_authenticated(self) -> bool:
         token = self.get_session_token()
-        return bool(token and token in self.sessions)    
+        if not token:
+            return False
 
+        if token not in self.sessions:
+            return False
+
+        session_started = self.sessions[token]
+        now = time.time()
+
+        if now - session_started > self.session_timeout_seconds:
+            del self.sessions[token]
+            return False
+
+        self.sessions[token] = now
+        return True
+        
     def redirect(self, location: str) -> None:
         self.send_response(303)
         self.send_header("Location", location)
@@ -88,7 +104,7 @@ class PerDocManHandler(BaseHTTPRequestHandler):
             },
         )
 
-        @classmethod
+    @classmethod
     def hash_password(cls, password: str, salt: bytes) -> bytes:
         return hashlib.pbkdf2_hmac(
             "sha256",
@@ -147,6 +163,7 @@ class PerDocManHandler(BaseHTTPRequestHandler):
             return
 
         self.render_error("Not Found", "The requested page could not be found.", status=404)
+    
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
 
@@ -220,7 +237,7 @@ class PerDocManHandler(BaseHTTPRequestHandler):
             return
 
         token = secrets.token_urlsafe(32)
-        self.sessions[token] = True
+        self.sessions[token] = time.time()
         self.log_auth_event("SUCCESSFUL_LOGIN")
 
         self.send_response(303)
