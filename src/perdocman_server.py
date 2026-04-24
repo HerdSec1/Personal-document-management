@@ -78,13 +78,17 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         self.send_header("Location", location)
         self.end_headers()    
 
-    def log_auth_event(self, event: str) -> None:
+    def log_audit_event(self, event: str, details: str = "") -> None:
         self.auth_log_path.parent.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(timezone.utc).isoformat()
         client_ip = self.client_address[0] if self.client_address else "unknown"
 
+        line = f"{timestamp} {event} from {client_ip}"
+        if details:
+            line += f" {details}"
+
         with self.auth_log_path.open("a", encoding="utf-8") as f:
-            f.write(f"{timestamp} {event} from {client_ip}\n")
+            f.write(line + "\n")
 
     def render_login(self, message: str = "", level: str = "info") -> None:
         banner = ""
@@ -205,6 +209,7 @@ class PerDocManHandler(BaseHTTPRequestHandler):
             msg = quote("Database reset successful")
             self.send_response(303)
             self.send_header("Location", f"/?level=success&msg={msg}")
+            self.log_audit_event("RESET_DATABASE")
             self.end_headers()
 
         except Exception as e:
@@ -232,13 +237,13 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         password = params.get("password", [""])[0]
 
         if not self.verify_password(password):
-            self.log_auth_event("FAILED_LOGIN")
+            self.log_audit_event("FAILED_LOGIN")
             self.redirect("/login?level=error&msg=Invalid%20password")
             return
 
         token = secrets.token_urlsafe(32)
         self.sessions[token] = time.time()
-        self.log_auth_event("SUCCESSFUL_LOGIN")
+        self.log_audit_event("SUCCESSFUL_LOGIN")
 
         self.send_response(303)
         self.send_header("Location", "/")
@@ -250,7 +255,7 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         if token and token in self.sessions:
             del self.sessions[token]
 
-        self.log_auth_event("LOGGED_OUT")
+        self.log_audit_event("LOGGED_OUT")
 
         self.send_response(303)
         self.send_header("Location", "/login?level=info&msg=Logged%20out")
@@ -492,6 +497,10 @@ class PerDocManHandler(BaseHTTPRequestHandler):
             return
 
         if (sensitivity or "").lower() in {"high", "critical"}:
+            self.log_audit_event(
+                "SENSITIVE_WARNING_VIEW",
+                f'doc_id={doc_id} filename="{original_filename}" sensitivity={sensitivity}'
+            )
             render_page(
                 self,
                 "sensitivity_warning.html",
@@ -502,6 +511,11 @@ class PerDocManHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+
+        self.log_audit_event(
+            "DOC_RAW_VIEW",
+            f'doc_id={doc_id} filename="{original_filename}"'
+        )
 
         data = path.read_bytes()
         self.send_response(200)
@@ -542,6 +556,11 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         if not path.exists():
             self.render_error("File Missing", "The document record exists, but the file is missing on disk.", status=404)
             return
+
+        self.log_audit_event(
+            "DOC_VIEW",
+            f'doc_id={doc_id} filename="{original_filename}" sensitivity={sensitivity or "unspecified"}'
+        )
 
         data = path.read_bytes()
         self.send_response(200)
