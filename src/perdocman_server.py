@@ -539,7 +539,7 @@ class PerDocManHandler(BaseHTTPRequestHandler):
         try:
             cur = conn.cursor()
             cur.execute(
-                "SELECT stored_path, original_filename FROM documents WHERE id = ?",
+                "SELECT stored_path, original_filename, sensitivity FROM documents WHERE id = ?",
                 (doc_id,),
             )
             row = cur.fetchone()
@@ -550,7 +550,7 @@ class PerDocManHandler(BaseHTTPRequestHandler):
             self.render_error("Document Not Found", "No document exists with that id.", status=404)
             return
 
-        stored_path, original_filename = row
+        stored_path, original_filename, sensitivity = row
         path = Path(stored_path)
 
         if not path.exists():
