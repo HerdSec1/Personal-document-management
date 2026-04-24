@@ -122,6 +122,7 @@ docs/
 ├── version-history.md
 └── images/
 
+
 ---
 
 ## Running the Application
@@ -132,10 +133,19 @@ Activate your virtual environment:
 Run the application:
 ..venv\Scripts\python.exe -m src.launcher
 
+### Automatic Launch Behavior
 
-Then open your browser:
+The launcher:
+
+- Starts a local HTTP server bound to `127.0.0.1`
+- Automatically selects an available port
+- Opens the application in your default web browser
+
+You will be directed to a URL similar to:
 http://127.0.0.1:<PORT>/
 
+
+No manual port configuration is required.
 
 ---
 
